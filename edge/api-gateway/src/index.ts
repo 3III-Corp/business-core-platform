@@ -26,7 +26,7 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 const membershipSchema = z.object({
   app_id: z.string().uuid(),
   roles: z.object({
-    role_name: z.string().min(1),
+    app_id: z.string().uuid(),\n    role_name: z.string().min(1),
     permissions: z.record(z.unknown()),
   }),
   applications: z.object({
@@ -41,7 +41,7 @@ const invalidateSchema = z.object({
   appCode: z.string().min(1).max(100).regex(/^[a-zA-Z0-9_-]+$/),
 });
 
-const verifiedHeaderNames = [
+const verifiedIdentityHeaderNames = [
   EdgeHeaders.userId,
   EdgeHeaders.orgId,
   EdgeHeaders.appId,
@@ -66,7 +66,7 @@ function cacheKey(userId: string, orgId: string, appCode: string): string {
   return `user:${userId}:org:${orgId}:app:${appCode}`;
 }
 
-function jsonError(c: Context, status: 400 | 401 | 403 | 404 | 500 | 503, code: string, message: string) {
+function jsonError(c: Context<{ Bindings: Env; Variables: Variables }>, status: 400 | 401 | 403 | 404 | 500 | 503, code: string, message: string) {
   return c.json({ error: code, message }, status);
 }
 
@@ -98,7 +98,7 @@ async function isAllowedOrigin(env: Env, origin: string): Promise<boolean> {
     .not("domain", "is", null);
 
   if (error || !data) return false;
-  return data.some((row) => {
+  const applicationRows = data as Array<{ domain: string | null }>;\n  return applicationRows.some((row) => {
     const domain = typeof row.domain === "string" ? row.domain.trim() : "";
     if (!domain) return false;
     try {
@@ -114,7 +114,7 @@ async function isAllowedOrigin(env: Env, origin: string): Promise<boolean> {
 const worker = {
   async fetch(request: Request, env: Env, executionCtx: ExecutionContext): Promise<Response> {
     const sanitizedHeaders = new Headers(request.headers);
-    for (const header of verifiedHeaderNames) sanitizedHeaders.delete(header);
+    for (const header of verifiedIdentityHeaderNames) sanitizedHeaders.delete(header);
     const sanitizedRequest = new Request(request, { headers: sanitizedHeaders });
     return app.fetch(sanitizedRequest, env, executionCtx);
   },
@@ -178,7 +178,7 @@ async function resolveContext(
 
   const { data, error } = await adminClient(env)
     .from("user_app_memberships")
-    .select("app_id, roles!inner(role_name, permissions), applications!inner(app_code, is_active)")
+    .select("app_id, roles!inner(app_id, role_name, permissions), applications!inner(app_code, is_active)")
     .eq("user_id", userId)
     .eq("org_id", orgId)
     .eq("applications.app_code", appCode)
@@ -189,7 +189,7 @@ async function resolveContext(
   if (!data) return null;
 
   const membership = membershipSchema.safeParse(data);
-  if (!membership.success || membership.data.applications.app_code !== appCode || !membership.data.applications.is_active) {
+  if (!membership.success || membership.data.applications.app_code !== appCode || !membership.data.applications.is_active || membership.data.roles.app_id !== membership.data.app_id) {
     throw new Error("membership_shape_invalid");
   }
 
