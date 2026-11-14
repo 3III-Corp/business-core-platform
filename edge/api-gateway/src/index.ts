@@ -171,13 +171,22 @@ async function resolveContext(
   appCode: string,
 ): Promise<VerifiedEdgeContext | null> {
   const key = cacheKey(userId, orgId, appCode);
-  const cached = await env.RBAC_PERMISSIONS_KV.get(key, "json");
-  if (cached) {
+  let cached: unknown = null;
+  try {
+    cached = await env.RBAC_PERMISSIONS_KV.get(key, "json");
+  } catch {
+    // KV is an optimization; continue to the authoritative database on cache failure.
+  }
+  if (cached !== null) {
     const parsed = VerifiedEdgeContextSchema.safeParse(cached);
     if (parsed.success && parsed.data.userId === userId && parsed.data.orgId === orgId) {
       return parsed.data;
     }
-    await env.RBAC_PERMISSIONS_KV.delete(key);
+    try {
+      await env.RBAC_PERMISSIONS_KV.delete(key);
+    } catch {
+      // An invalid cache entry is ignored even if deletion is temporarily unavailable.
+    }
   }
 
   const { data, error } = await adminClient(env)
@@ -206,7 +215,11 @@ async function resolveContext(
     permissions: membership.data.roles.permissions,
   });
 
-  await env.RBAC_PERMISSIONS_KV.put(key, JSON.stringify(context), { expirationTtl: 300 });
+  try {
+    await env.RBAC_PERMISSIONS_KV.put(key, JSON.stringify(context), { expirationTtl: 300 });
+  } catch {
+    // A cache write failure must not deny a membership verified against Supabase.
+  }
   return context;
 }
 
