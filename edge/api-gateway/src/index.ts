@@ -34,6 +34,7 @@ const membershipSchema = z.object({
     app_code: z.string().min(1),
     is_active: z.boolean(),
   }),
+  organizations: z.object({ status: z.enum(["active", "suspended", "archived"]) }),
 });
 
 const invalidateSchema = z.object({
@@ -181,18 +182,19 @@ async function resolveContext(
 
   const { data, error } = await adminClient(env)
     .from("user_app_memberships")
-    .select("app_id, roles!inner(app_id, role_name, permissions), applications!inner(app_code, is_active)")
+    .select("app_id, roles!inner(app_id, role_name, permissions), applications!inner(app_code, is_active), organizations!inner(status)")
     .eq("user_id", userId)
     .eq("org_id", orgId)
     .eq("applications.app_code", appCode)
     .eq("applications.is_active", true)
+    .eq("organizations.status", "active")
     .maybeSingle();
 
   if (error) throw new Error("membership_lookup_failed");
   if (!data) return null;
 
   const membership = membershipSchema.safeParse(data);
-  if (!membership.success || membership.data.applications.app_code !== appCode || !membership.data.applications.is_active || membership.data.roles.app_id !== membership.data.app_id) {
+  if (!membership.success || membership.data.applications.app_code !== appCode || !membership.data.applications.is_active || membership.data.roles.app_id !== membership.data.app_id || membership.data.organizations.status !== "active") {
     throw new Error("membership_shape_invalid");
   }
 
