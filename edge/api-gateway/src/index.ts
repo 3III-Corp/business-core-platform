@@ -26,7 +26,8 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 const membershipSchema = z.object({
   app_id: z.string().uuid(),
   roles: z.object({
-    app_id: z.string().uuid(),\n    role_name: z.string().min(1),
+    app_id: z.string().uuid(),
+    role_name: z.string().min(1),
     permissions: z.record(z.unknown()),
   }),
   applications: z.object({
@@ -98,7 +99,8 @@ async function isAllowedOrigin(env: Env, origin: string): Promise<boolean> {
     .not("domain", "is", null);
 
   if (error || !data) return false;
-  const applicationRows = data as Array<{ domain: string | null }>;\n  return applicationRows.some((row) => {
+  const applicationRows = data as Array<{ domain: string | null }>;
+  return applicationRows.some((row) => {
     const domain = typeof row.domain === "string" ? row.domain.trim() : "";
     if (!domain) return false;
     try {
