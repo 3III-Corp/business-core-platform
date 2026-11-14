@@ -1,0 +1,1 @@
+CRITICAL: Before writing any code or making architectural decisions, you MUST read and strictly follow all rules in `.ai/SYSTEM_RULES.md` and check the latest project status in `.ai/CURRENT_STATE.md`. Always update `.ai/CURRENT_STATE.md` and `.ai/HANDOFF_LOG.md` before concluding your session.
