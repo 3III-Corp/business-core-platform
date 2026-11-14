@@ -48,8 +48,9 @@ const verifiedIdentityHeaderNames = [
   EdgeHeaders.appId,
   EdgeHeaders.userRole,
   EdgeHeaders.userPermissions,
-  EdgeHeaders.edgeSecret,
 ] as const;
+
+const verifiedHeaderNames = [...verifiedIdentityHeaderNames, EdgeHeaders.edgeSecret] as const;
 
 function adminClient(env: Env): SupabaseClient {
   return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
