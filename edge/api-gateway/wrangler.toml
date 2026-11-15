@@ -12,8 +12,7 @@ BACKEND_API_URL = "https://YOUR_BACKEND_ORIGIN"
 
 [[kv_namespaces]]
 binding = "RBAC_PERMISSIONS_KV"
-id = "REPLACE_WITH_PRODUCTION_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID"
+id = "2cc0acca1b9848978f59ac16e6c27f52"
 
 # Set secrets separately; never commit secret values:
 # npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
