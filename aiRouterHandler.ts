@@ -8,9 +8,9 @@ export type TargetAiPartner =
   | "base44-builder";
 
 export type GeminiHubMode =
-  | "dispatch-context"   // 1. แจกจ่ายข้อมูลบริบทอ้างอิงทุกส่วน + สเปกโมดูลเฉพาะจุดให้ AI รายอื่น
-  | "ingest-and-merge"   // 2. รับข้อสรุปจาก AI รายอื่นมาเทียบกับ Baseline และร่างการอัปเดตเข้าระบบ
-  | "mobile-brief";      // 3. สรุปสถานะสั้นสำหรับเปิดดูบนมือถือ
+  | "dispatch-context"
+  | "ingest-and-merge"
+  | "mobile-brief";
 
 export interface ModuleContextNode {
   moduleId: string;
@@ -24,6 +24,7 @@ export interface ModuleContextNode {
 export interface ProjectBaselineRegistry {
   repoUrl: string;
   baselineVersion: string;
+  serverRouterPath: string;
   schemas: string[];
   providersAndBanks: {
     baseline: string[];
@@ -40,7 +41,7 @@ export interface GeminiHubRequest {
   targetAi?: TargetAiPartner;
   focusModuleId?: string;
   taskPrompt: string;
-  externalAiSummary?: string; // ใช้ในโหมด ingest-and-merge เมื่อคุณนำข้อสรุปจาก AI รายอื่นกลับมาส่งให้ Gemini อัปเดต
+  externalAiSummary?: string;
   actorId?: string;
   correlationId?: string;
 }
@@ -49,6 +50,7 @@ export interface GeminiHubResponse {
   correlationId: string;
   mode: GeminiHubMode;
   repoUrl: string;
+  serverRouterPath: string;
   baselineVersion: string;
   outputText: string;
   requiresHumanApproval: true;
@@ -59,10 +61,13 @@ export interface GeminiHubResponse {
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
 
-// แหล่งบริบทกลางอ้างอิงทุกส่วนของโครงการ (อัปเดตตาม Baseline ล่าสุดของ 3III-Corp/business-core-platform)
+// ตำแหน่งมาตรฐานของไฟล์ Router ฝั่ง Server / Edge
+export const SERVER_AI_ROUTER_PATH = "edge/aiRouterHandler.ts";
+
 export const BOSN_PROJECT_REGISTRY: ProjectBaselineRegistry = {
   repoUrl: "https://github.com/3III-Corp/business-core-platform/tree/main",
   baselineVersion: "BOSN-BASELINE-2026-11-23",
+  serverRouterPath: SERVER_AI_ROUTER_PATH,
   schemas: [
     "core",
     "iam",
@@ -75,7 +80,15 @@ export const BOSN_PROJECT_REGISTRY: ProjectBaselineRegistry = {
     "private",
   ],
   providersAndBanks: {
-    baseline: ["Omise", "2C2P", "Xendit", "Nium", "PromptPay Rail", "KYC Provider", "Card Issuer"],
+    baseline: [
+      "Omise",
+      "2C2P",
+      "Xendit",
+      "Nium",
+      "PromptPay Rail",
+      "KYC Provider",
+      "Card Issuer",
+    ],
     cambodiaBanks: ["PPCBank", "Wing Bank", "ABA Bank"],
     isolationPolicy:
       "Server-side Provider Adapter behind API Boundary. Any single provider/bank can be disconnected or offboarded independently without full-app downtime. Full downtime applies strictly to major version upgrades or security patches.",
@@ -98,15 +111,18 @@ export const BOSN_PROJECT_REGISTRY: ProjectBaselineRegistry = {
       name: "Core Platform, IAM & Multi-Tenant Isolation",
       repoPath: "supabase/ & packages/",
       gateStatus: "G0/G1 Baseline Approved — Implementation Pending Gate Sign-off",
-      summary: "9 logical schemas with RLS isolation, human-to-account binding, and scoped permissions.",
+      summary:
+        "9 logical schemas with RLS isolation, human-to-account binding, and scoped permissions.",
       dependencies: ["MOD-AUDIT"],
     },
     {
       moduleId: "MOD-PROVIDER-GW",
       name: "Payment Gateway & Banking Adapters (TH + Cambodia)",
       repoPath: "edge/ & packages/",
-      gateStatus: "G1/G2 — PPCBank, Wing Bank, ABA Bank added to baseline; sandbox/contract pending",
-      summary: "Normalized server-side adapters, signature-checked deduplicated webhooks, and zero-downtime provider disconnect.",
+      gateStatus:
+        "G1/G2 — PPCBank, Wing Bank, ABA Bank added to baseline; sandbox/contract pending",
+      summary:
+        "Normalized server-side adapters, signature-checked deduplicated webhooks, and zero-downtime provider disconnect.",
       dependencies: ["MOD-WALLET-LEDGER", "MOD-CORE-IAM"],
     },
     {
@@ -114,15 +130,18 @@ export const BOSN_PROJECT_REGISTRY: ProjectBaselineRegistry = {
       name: "3III Wallet, Double-Entry Ledger & Fund Settlement",
       repoPath: "packages/ & supabase/",
       gateStatus: "G1/G2 — Scope & Tier Limits Defined",
-      summary: "Append-only double-entry ledger, idempotency, bound-bank payout refund or governed waiver/suspense on termination.",
+      summary:
+        "Append-only double-entry ledger, idempotency, bound-bank payout refund or governed waiver/suspense on termination.",
       dependencies: ["MOD-KYC-PDPA", "MOD-PROVIDER-GW"],
     },
     {
       moduleId: "MOD-KYC-PDPA",
       name: "KYC Orchestration, PDPA Retention & Account Lifecycle",
       repoPath: "edge/ & supabase/",
-      gateStatus: "G1/G2 — Policy Defined; Legal Retention Schedule Confirmation Pending",
-      summary: "Segregated encrypted raw KYC storage, minimal provider_refs in core DB, and returning-user Reactivation/Re-KYC within retention window.",
+      gateStatus:
+        "G1/G2 — Policy Defined; Legal Retention Schedule Confirmation Pending",
+      summary:
+        "Segregated encrypted raw KYC storage, minimal provider_refs in core DB, and returning-user Reactivation/Re-KYC within retention window.",
       dependencies: ["MOD-CORE-IAM"],
     },
     {
@@ -130,15 +149,17 @@ export const BOSN_PROJECT_REGISTRY: ProjectBaselineRegistry = {
       name: "App Factory, BOEM & Partner Workspaces",
       repoPath: "packages/ & .ai/",
       gateStatus: "G2 — Spec Aligned with BOSN Core IP & Multi-Tenant Rules",
-      summary: "Scoped downstream apps and partner workspaces with contract expiry, IP separation (III owns BOSN Core), and pre-approval controls.",
+      summary:
+        "Scoped downstream apps and partner workspaces with contract expiry, IP separation (III owns BOSN Core), and pre-approval controls.",
       dependencies: ["MOD-CORE-IAM", "MOD-PROVIDER-GW"],
     },
     {
       moduleId: "MOD-AI-HUB",
       name: "Multi-AI Context & Handoff Orchestrator",
-      repoPath: "aiRouterHandler.ts & GEMINI.md",
+      repoPath: `${SERVER_AI_ROUTER_PATH} & GEMINI.md`,
       gateStatus: "Active Orchestration Layer (Advisory Only)",
-      summary: "Dispatches unified BOSN context to external AIs (GPT/Claude/Codex/Base44) and merges approved summaries back into baseline records.",
+      summary:
+        "Dispatches unified BOSN context to external AIs (GPT/Claude/Codex/Base44) and merges approved summaries back into baseline records.",
       dependencies: ["MOD-CORE-IAM"],
     },
   ],
@@ -148,6 +169,7 @@ function buildGeminiSystemPrompt(mode: GeminiHubMode): string {
   const base = [
     `You are the Central Context Dispatcher & State Synchronizer for 3III Business OS Nexus (BOSN).`,
     `Authoritative Repository: ${BOSN_PROJECT_REGISTRY.repoUrl}`,
+    `Server Router Location: ${BOSN_PROJECT_REGISTRY.serverRouterPath}`,
     `Baseline Version: ${BOSN_PROJECT_REGISTRY.baselineVersion}`,
     `Hard Rules: Never authorize production writes, schema/RLS changes, secret exposure, or human approvals. Always separate verified state from draft proposals.`,
   ];
@@ -166,7 +188,7 @@ function buildGeminiSystemPrompt(mode: GeminiHubMode): string {
       ...base,
       `Task Mode: INGEST & SYNCHRONIZE EXTERNAL AI CONCLUSION.`,
       `Compare the incoming conclusion from the external AI against the current BOSN_PROJECT_REGISTRY.`,
-      `Produce: (1) Conflict & Governance Check (flag any violation of Reserved Matters, RLS, Secrets, or Provider Isolation), (2) Proposed Registry/Document Patch (exact updates to module status, specs, or Action Plan), and (3) Human Sign-off Checklist before committing to GitHub/Notebook.`,
+      `Produce: (1) Conflict & Governance Check (flag any violation of Reserved Matters, RLS, Secrets, or Provider Isolation), (2) Proposed Registry/Document Patch (exact updates to module status, specs, or Action Plan), and (3) Human Sign-off Checklist before committing to GitHub or updating project records.`,
     ].join("\n");
   }
 
@@ -240,6 +262,7 @@ export async function runBosnGeminiHub(
     correlationId,
     mode: req.mode,
     repoUrl: BOSN_PROJECT_REGISTRY.repoUrl,
+    serverRouterPath: SERVER_AI_ROUTER_PATH,
     baselineVersion: BOSN_PROJECT_REGISTRY.baselineVersion,
     outputText,
     requiresHumanApproval: true,
