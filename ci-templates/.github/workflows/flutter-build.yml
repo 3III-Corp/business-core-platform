@@ -1,1 +1,257 @@
+name: Flutter Build (Reusable)
 
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: 'Build target'
+        type: string
+        required: true
+        # android | web | both
+      
+      environment:
+        description: 'GitHub Environment name (staging/production)'
+        type: string
+        required: true
+      
+      build_name:
+        description: 'Version name (e.g. 1.2.0)'
+        type: string
+        required: true
+      
+      build_number:
+        description: 'Build number (e.g. GitHub run number)'
+        type: string
+        required: false
+        default: ''
+      
+      # Android specific
+      android_format:
+        description: 'apk | appbundle'
+        type: string
+        required: false
+        default: 'apk'
+      
+      split_per_abi:
+        description: 'Split APK per ABI (only for apk format)'
+        type: boolean
+        required: false
+        default: false
+      
+      # Web specific
+      base_href:
+        description: 'Base href for Flutter Web'
+        type: string
+        required: false
+        default: '/'
+      
+      flutter_version:
+        description: 'Flutter SDK version'
+        type: string
+        required: false
+        default: '3.24.0'
+      
+      java_version:
+        description: 'Java version for Android build'
+        type: string
+        required: false
+        default: '17'
+      
+      # R2 prefix (แยกโฟลเดอร์ตาม environment)
+      artifact_prefix:
+        description: 'Prefix for R2 path (default: env name)'
+        type: string
+        required: false
+        default: ''
+    
+    secrets:
+      R2_ACCOUNT_ID:
+        required: true
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      R2_BUCKET:
+        required: true
+      # Android signing (optional - ถ้าไม่ส่งมาจะ build unsigned)
+      KEYSTORE_BASE64:
+        required: false
+      KEY_STORE_PASSWORD:
+        required: false
+      KEY_PASSWORD:
+        required: false
+      KEY_ALIAS:
+        required: false
+    
+    outputs:
+      android_url:
+        description: 'URL ของ APK/AAB บน R2 (ถ้า build android)'
+        value: ${{ jobs.android-build.outputs.artifact_url }}
+      web_url:
+        description: 'URL ของ web bundle บน R2 (ถ้า build web)'
+        value: ${{ jobs.web-build.outputs.artifact_url }}
+      android_run_id:
+        description: 'GitHub run id สำหรับ android'
+        value: ${{ jobs.android-build.outputs.run_id }}
+      web_run_id:
+        description: 'GitHub run id สำหรับ web'
+        value: ${{ jobs.web-build.outputs.run_id }}
+
+jobs:
+  # ============================================================
+  # Android Build (APK / AppBundle)
+  # ============================================================
+  android-build:
+    if: inputs.target == 'android' || inputs.target == 'both'
+    runs-on: ubuntu-latest
+    # ★ Environment ใช้กำหนดว่า job นี้จะดึง secret จาก environment ไหน
+    environment: ${{ inputs.environment }}
+    
+    outputs:
+      artifact_url: ${{ steps.upload.outputs.url }}
+      run_id: ${{ github.run_id }}
+    
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ inputs.java_version }}
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: 'stable'
+          cache: true
+      
+      - name: Resolve build number
+        id: meta
+        run: |
+          BUILD_NUM="${{ inputs.build_number }}"
+          if [ -z "$BUILD_NUM" ]; then
+            BUILD_NUM="${{ github.run_number }}"
+          fi
+          echo "build_number=$BUILD_NUM" >> $GITHUB_OUTPUT
+          echo "Using build number: $BUILD_NUM"
+      
+      - name: Get dependencies
+        run: flutter pub get
+      
+      - name: Configure signing (ถ้ามี keystore)
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storePassword=$KEY_STORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=upload-keystore.jks
+          EOF
+      
+      - name: Build Android
+        run: |
+          FLAGS="--release \
+            --build-name=${{ inputs.build_name }} \
+            --build-number=${{ steps.meta.outputs.build_number }}"
+          
+          if [ "${{ inputs.android_format }}" = "appbundle" ]; then
+            flutter build appbundle $FLAGS
+            echo "OUTPUT_PATH=build/app/outputs/bundle/release" >> $GITHUB_ENV
+          else
+            if [ "${{ inputs.split_per_abi }}" = "true" ]; then
+              flutter build apk $FLAGS --split-per-abi
+            else
+              flutter build apk $FLAGS
+            fi
+            echo "OUTPUT_PATH=build/app/outputs/flutter-apk" >> $GITHUB_ENV
+          fi
+      
+      - name: Cleanup signing files
+        if: always()
+        run: rm -f android/key.properties android/upload-keystore.jks
+      
+      - name: Upload to Cloudflare R2
+        id: upload
+        uses: ryand56/r2-upload-action@latest
+        with:
+          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2-bucket: ${{ secrets.R2_BUCKET }}
+          source-dir: ${{ env.OUTPUT_PATH }}
+          destination-dir: >-
+            ${{ inputs.artifact_prefix != '' && inputs.artifact_prefix || inputs.environment }}/android/${{ github.run_id }}/
+          keep-file-fresh: false
+      
+      - name: Upload artifact (GitHub fallback)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ inputs.environment }}-${{ github.run_id }}
+          path: ${{ env.OUTPUT_PATH }}
+          retention-days: 7
+
+  # ============================================================
+  # Web Build
+  # ============================================================
+  web-build:
+    if: inputs.target == 'web' || inputs.target == 'both'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    outputs:
+      artifact_url: ${{ steps.upload.outputs.url }}
+      run_id: ${{ github.run_id }}
+    
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter_version }}
+          channel: 'stable'
+          cache: true
+      
+      - name: Get dependencies
+        run: flutter pub get
+      
+      - name: Build Web
+        run: |
+          flutter build web --release \
+            --base-href=${{ inputs.base_href }} \
+            --build-name=${{ inputs.build_name }}
+      
+      - name: Zip output
+        run: |
+          cd build/web
+          zip -r ../../web-build.zip .
+      
+      - name: Upload to Cloudflare R2
+        id: upload
+        uses: ryand56/r2-upload-action@latest
+        with:
+          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2-bucket: ${{ secrets.R2_BUCKET }}
+          source-dir: web-build.zip
+          destination-dir: >-
+            ${{ inputs.artifact_prefix != '' && inputs.artifact_prefix || inputs.environment }}/web/${{ github.run_id }}/
+          keep-file-fresh: false
+      
+      - name: Upload artifact (GitHub fallback)
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-${{ inputs.environment }}-${{ github.run_id }}
+          path: web-build.zip
+          retention-days: 7
